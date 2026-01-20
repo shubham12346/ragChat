@@ -26,8 +26,16 @@ export interface ChatSession {
 export interface ChatMessage {
   id: string;
   session_id: string;
-  role: 'user' | 'assistant' | 'system';
+  role: "user" | "assistant" | "system";
   content: string;
   created_at: Date;
 }
 
+// Type for citations used in responses
+export type Citation = {
+  index: number;
+  chunkId: string;
+  documentName: string;
+  chunkIndex: number;
+  content: string;
+};

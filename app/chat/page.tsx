@@ -1,8 +1,8 @@
 "use client";
 
 import { useChat } from "@ai-sdk/react";
-import { DefaultChatTransport } from "ai";
-import { useEffect, useState } from "react";
+import { DefaultChatTransport, UIDataTypes, UIMessage, UITools } from "ai";
+import { useCallback, useEffect, useState } from "react";
 import History from "./component/history";
 import { useRouter, useSearchParams } from "next/navigation";
 
@@ -11,26 +11,30 @@ export default function ChatPage() {
   const [history, setHistory] = useState<any[]>([]);
   const searchParams = useSearchParams();
   const sessionId = searchParams.get("sessionId");
-  useEffect(() => {
-    const fetchHistory = async () => {
-      if (!sessionId) {
-        setHistory([]);
-        return;
-      }
-      const history = await fetch(
-        `/api/chat?sessionId=${sessionId}`
-      ).then(res => res.json());
-      console.log("history messages --------", history);
-      setHistory(history);
-    };
-    fetchHistory();
-  }, [sessionId]);
+  const fetchHistory = useCallback(async (activeSessionId: string | null) => {
+    if (!activeSessionId) {
+      setHistory([]);
+      return;
+    }
+    const history = await fetch(
+      `/api/chat?sessionId=${activeSessionId}`
+    ).then(res => res.json());
+    console.log("history messages --------", history);
+    setHistory(history);
+  }, []);
 
-  const { messages, sendMessage, status, stop, error } = useChat({
+  useEffect(() => {
+    fetchHistory(sessionId);
+  }, [fetchHistory, sessionId]);
+
+  const { messages, sendMessage, status, stop, error } = useChat<UIMessage<unknown, UIDataTypes, UITools>>({
     transport: new DefaultChatTransport({
       api: "/api/chat",
     }),
     id: sessionId || '', // optional session ID
+    onFinish: async () => {
+      await fetchHistory(sessionId);
+    },
   });
 
   const [input, setInput] = useState("");
@@ -38,8 +42,22 @@ export default function ChatPage() {
     id: `history-${index}`,
     role: message.role,
     parts: [{ type: "text" as const, text: message.content }],
+    citations: typeof message.citations === "string"
+      ? JSON.parse(message.citations)
+      : message.citations,
   }));
-  const allMessages = historyMessages ? [...historyMessages, ...messages] : messages;
+  const messageText = (message: UIMessage<unknown, UIDataTypes, UITools>) =>
+    message.parts?.find((part) => part.type === "text")?.text || "";
+
+  const historyKeySet = new Set(
+    (historyMessages || []).map(
+      (message: any) => `${message.role}:${message.parts?.[0]?.text || ""}`
+    )
+  );
+  const liveMessages = messages.filter(
+    (message) => !historyKeySet.has(`${message.role}:${messageText(message)}`)
+  );
+  const allMessages = historyMessages ? [...historyMessages, ...liveMessages] : messages;
   console.log("messages--------", messages);
 
   return (
@@ -57,7 +75,9 @@ export default function ChatPage() {
         </aside>
         <section className="flex flex-col overflow-hidden">
           <div className="flex-1 overflow-y-auto p-4 space-y-4 mt-6">
-            {allMessages.map((message) => (
+            {allMessages.map((message) => {
+              const citations = (message as any)?.citations;
+              return (
               <div
                 key={message.id}
                 className={message.role === "user" ? "text-right" : "text-left"}
@@ -66,8 +86,19 @@ export default function ChatPage() {
                 {message.parts.map((part, index) =>
                   part.type === "text" ? <span key={index}>{part.text}</span> : null
                 )}
+                {message.role === "assistant" &&
+                  status === "ready" &&
+                  citations &&
+                  citations?.length > 0 && (
+                  <div className="text-sm text-gray-500">
+                    <p>Citations:</p>
+                    {citations?.map((citation: any) => (
+                      <p key={citation.index}>{citation.content}</p>
+                    ))}
+                  </div>
+                )}
               </div>
-            ))}
+            )})}
           </div>
 
           {/* Status Controls */}
