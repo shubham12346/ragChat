@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { v4 as uuidv4, validate as uuidValidate } from "uuid";
+import { validate as uuidValidate } from "uuid";
 import { pool } from "@/app/lib/db";
 import { openai } from "@/app/lib/openai";
 import { getEmbedding } from "@/app/lib/embedding";
 import { streamText } from "ai";
+import { getChatHistory } from "@/app/lib/chat/history";
 
 export async function POST(req: NextRequest) {
   try {
@@ -11,28 +12,43 @@ export async function POST(req: NextRequest) {
     console.log("sessionId", sessionId ?? id);
     console.log("messages", messages);
     
+    const providedSessionId = sessionId || id;
+
     // Validate message
-    if (!messages || messages.length === 0) {
+    if (!messages || messages.length === 0 || !providedSessionId) {
       return NextResponse.json(
-        { error: "Messages are required" },
+        { error: "Messages and sessionId are required" },
         { status: 400 }
       );
     }
     
-    // Create or normalize session ID; DB expects a UUID
-    const providedSessionId = sessionId || id;
-    const currentSessionId =
-      providedSessionId && uuidValidate(providedSessionId)
-        ? providedSessionId
-        : uuidv4();
+    // Validate session ID; DB expects a UUID
+    if (!uuidValidate(providedSessionId)) {
+      return NextResponse.json(
+        { error: "Invalid sessionId" },
+        { status: 400 }
+      );
+    }
+
+    const currentSessionId = providedSessionId;
     console.log("Using session ID:", currentSessionId);
 
-    // Ensure the session exists in chat_sessions table
-    // Use INSERT ... ON CONFLICT to handle both new and existing sessions
-    await pool.query(
-      `INSERT INTO chat_sessions (id) VALUES ($1) ON CONFLICT (id) DO NOTHING`,
+    // Ensure the session belongs to a document before proceeding
+    const sessionRow = await pool.query(
+      `
+      SELECT document_id FROM chat_sessions WHERE id = $1
+      `,
       [currentSessionId]
     );
+
+    if (sessionRow.rows.length === 0) {
+      return NextResponse.json(
+        { error: "Session not found. Please upload a document." },
+        { status: 404 }
+      );
+    }
+
+    const documentId = sessionRow.rows[0].document_id as string;
 
     // Extract text from the last message's parts array
     const lastMessage = messages[messages.length - 1];
@@ -55,6 +71,7 @@ export async function POST(req: NextRequest) {
       ` SELECT role, content FROM chat_messages WHERE session_id = $1 ORDER BY created_at ASC `,
       [currentSessionId]
     );
+
     
     // Convert database history to message format for LLM
     const historyMessages = history.rows.map((row: { role: string; content: string }) => ({
@@ -72,10 +89,11 @@ export async function POST(req: NextRequest) {
     SELECT chunks.content, documents.name, chunks.chunk_index
     FROM chunks
     JOIN documents ON documents.id = chunks.document_id
+    WHERE documents.id = $2
     ORDER BY chunks.embedding <=> $1::vector
     LIMIT 5
     `,
-      [embeddingString]
+      [embeddingString, documentId]
     );
 
     console.log("retrieved--------", retrieved);
@@ -128,4 +146,23 @@ ${context}
       { status: 500 }
     );
   }
+}
+
+export async function GET(req: NextRequest) {
+  const sessionId = req.nextUrl.searchParams.get("sessionId");
+  console.log("sessionId--------", sessionId);
+  const isValidUuid =
+    !!sessionId &&
+    sessionId !== "null" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      sessionId
+    );
+  if (!isValidUuid) {
+    return NextResponse.json(
+      { error: "Valid session ID is required" },
+      { status: 400 }
+    );
+  }
+  const history = await getChatHistory(sessionId);
+  return NextResponse.json(history);
 }

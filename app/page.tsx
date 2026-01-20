@@ -31,8 +31,9 @@ export default function Home() {
 
       const data = await res.json();
 
-      // Expecting: { documentId: string }
-      router.push(`/chat?docId=${data.documentId}`);
+      // Expecting: { sessionId: string }
+      console.log("data--------", data);
+      router.push(`/chat?sessionId=${data.sessionId}`);
     } catch (err) {
       console.error("Upload error:", err);
       setError("Failed to upload file. Please try again.");

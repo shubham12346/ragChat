@@ -42,15 +42,15 @@ export async function POST(req: NextRequest) {
     const documentId = uuidv4();
     const sessionId = uuidv4();
 
-    await pool.query(
-      "INSERT INTO chat_sessions (id) VALUES ($1)",
-      [sessionId, documentId]
-    );
-
     await pool.query("INSERT INTO documents (id, name) VALUES ($1, $2)", [
       documentId,
       file.name,
     ]);
+
+    await pool.query(
+      "INSERT INTO chat_sessions (id, document_id) VALUES ($1, $2)",
+      [sessionId, documentId]
+    );
 
     console.log("Document record created with ID:", documentId);
 
@@ -68,6 +68,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       message: "File uploaded and processed successfully",
       documentId,
+      sessionId,
       chunksStored: chunks.length,
     });
   } catch (error) {
